@@ -1,0 +1,134 @@
+version: "3.9"
+
+services:
+
+  # ================= DATABASE =================
+  postgres:
+    image: postgres:17
+    container_name: polix_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: polix
+      POSTGRES_PASSWORD: polix123
+      POSTGRES_DB: polix_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - polix_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polix -d polix_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ================= REDIS =================
+  redis:
+    image: redis:7
+    container_name: polix_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - polix_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ================= IAM SERVICE =================
+  iam_service:
+    build: ./services/iam_service
+    container_name: iam_service
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_URL: postgresql://polix:polix123@postgres:5432/polix_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RUN_SEED: "false"
+
+    ports:
+      - "8001:8000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    volumes:
+      - ./services/iam_service:/app
+
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    networks:
+      - polix_net
+
+  # ================= CUSTOMER SERVICE =================
+  customer_service:
+    build: ./services/customer_service
+    container_name: customer_service
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_URL: postgresql://polix:polix123@postgres:5432/polix_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    ports:
+      - "8002:8000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    volumes:
+      - ./services/customer_service:/app
+
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    networks:
+      - polix_net
+
+  # ================= FRONTEND =================
+  frontend:
+    build: ./polix-frontend
+    container_name: polix_frontend
+    restart: unless-stopped
+
+    ports:
+      - "5173:5173"
+
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - VITE_API_URL=http://localhost:8001
+
+    volumes:
+      - ./polix-frontend:/app
+      - /app/node_modules
+
+    depends_on:
+      - iam_service
+
+    command: npm run dev -- --host
+
+    networks:
+      - polix_net
+
+# ================= NETWORK =================
+networks:
+  polix_net:
+    driver: bridge
+
+# ================= VOLUMES =================
+volumes:
+  postgres_data:
